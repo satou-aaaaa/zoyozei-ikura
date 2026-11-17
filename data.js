@@ -81,7 +81,7 @@
   ];
 
   const yen = (n) => n.toLocaleString("ja-JP") + "円";
-  const man = (n) => (n % MAN === 0 ? `${(n / MAN).toLocaleString("ja-JP")}万円` : yen(n));
+  const man = (n) => (n !== 0 && n % MAN === 0 ? `${(n / MAN).toLocaleString("ja-JP")}万円` : yen(n));
   const label = (t) => (t === 0 ? "かからない（0円）" : yen(t));
   const ri = (R, a, b) => a + Math.floor(R() * (b - a + 1));
   function shuffle(R, a) { const b = a.slice(); for (let i = b.length - 1; i > 0; i--) { const j = ri(R, 0, i); [b[i], b[j]] = [b[j], b[i]]; } return b; }
@@ -103,7 +103,7 @@
       for (const x of [10 * MAN, 20 * MAN, 5 * MAN, 1 * MAN, 30 * MAN]) { if (new Set(wrong0).size >= 3) break; if (ok(x) && !wrong0.includes(x)) wrong0.push(x); }
       const wrong = pickN(R, [...new Set(wrong0)].sort((a, b) => a - b), 3);
       const opts = shuffle(R, [ans, ...wrong]).map(label);
-      const full = k <= 0 ? `${sentence} → ${man(gift)}は110万円以下なので、${label(0)}` : `${sentence} → (${man(gift)}−110万円)×${TAB[tab][rowOf(tab, k)][1]}％−${man(TAB[tab][rowOf(tab, k)][2]).replace(/^0円$/, "0円")}＝${yen(ans)}`;
+      const full = k <= 0 ? `${sentence} → ${man(gift)}は110万円以下なので、${label(0)}` : `${sentence} → (${man(gift)}−110万円)×${TAB[tab][rowOf(tab, k)][1]}％−${man(TAB[tab][rowOf(tab, k)][2])}＝${yen(ans)}`;
       return { type: "act", q: `${sentence}　贈与税はいくら？`, opts, ans: label(ans), rev: false, full, amt: gift, tax: ans, grp, v: `${gift}` };
     };
   }
