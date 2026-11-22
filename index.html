@@ -339,13 +339,15 @@ html.a11y-say body{padding-bottom:calc(64px + env(safe-area-inset-bottom,0px))!i
 // ゲームの共通部品 game-core。ひな形: satou-aaaaa/shared-workflows の template/core/core.js。
 // ゲームでは直さない。index.html の core:begin〜core:end の印のあいだに node scripts/sync-template.mjs <ゲームのフォルダ> で写す
 // （ファイルを足さないので sw.js の SHELL は変えない）。ゲームからは window.Core で使う。
-// 共通部品の版: 2
+// 共通部品の版: 3
 //   1: 2026-11-21 ゲームごとに手で写していた小さな関数を1か所に集めた。40本で同じ役目の関数が何通りにも分かれ
 //      （お知らせの帯 11通り・振動 10通り・文字を安全にする esc 4通り・数の読み込み num 2通り）、
 //      「動きを減らす」でも振動する・お知らせが読み上げられない・num の直し（#410）が22本に届かない・esc が " を変えない、が起きていた
 //      （incidents/2026-11-21-hand-copied-helpers-drift.md）。
 //      あわせて、はじめて遊ぶ人への案内（吹き出し Core.coach）を足した。長い「遊び方」の窓の代わりに、練習の1問を遊びながら
 //      その場で一言ずつ教える（NN/g「Mobile Instructional Overlays」・Andersen ほか CHI 2012「The Impact of Tutorials on Games of Varying Complexity」）。
+//   3: 2026-11-22 吹き出しを出しているあいだ 0.4 秒ごとに場所を測り直す（古い場所に残って押す所を隠すことがあった）。ボタンの字を「案内を閉じる」に。
+//      段の wait（その所が出るまで待つ）を足した。全ゲームの「はじめての練習」を sync-template の migrateFirstPlay が足すため
 //   2: 2026-11-22 感想フォームのゲーム名を、渡さなければ題（<title>）から入れる。sync-template が全ゲームを game-core に切り替える（migrateCore）ため
 // 決まり: 外へ通信しない。ゲームの関数の名前（toast・buzz など）は上書きしない（Core.toast などで呼ぶ）。
 (function () {
@@ -431,10 +433,11 @@ html.a11y-say body{padding-bottom:calc(64px + env(safe-area-inset-bottom,0px))!i
   //   sel   …… 吹き出しを付ける所。まだ画面に無いあいだは待つ（ゲームが画面を作り直しても付け直す）
   //   until …… その所が画面に出たら次へ進む（答えた・正解した など）。無ければ sel を押したら次へ
   //   button …… 押すと次へ進むボタンの字（読むだけの吹き出し）
+  //   wait  …… その所が画面に出るまで、この吹き出しは出さずに待つ（答えたあとにだけ「次へ」を指す など）
   //   pos   …… "below"（既定）か "above"。その側に場所が無ければ、ページを少し動かして場所を空ける（読む所を隠さないため）
-  // 吹き出しは押す所を隠さない（上か下の空いたほうに出す）。「案内をとじる」と Esc でいつでもやめられる。
+  // 吹き出しは押す所を隠さない（上か下の空いたほうに出す）。「案内を閉じる」と Esc でいつでもやめられる。
   const coach = (() => {
-    let steps = null, i = 0, opt = {}, box = null, tgt = null, mo = null, raf = 0, shown = -1;
+    let steps = null, i = 0, opt = {}, box = null, tgt = null, mo = null, raf = 0, shown = -1, tick = 0;
     function css() {
       if (doc.getElementById("core-coach-css")) return;
       const s = doc.createElement("style");
@@ -453,7 +456,7 @@ html.a11y-say body{padding-bottom:calc(64px + env(safe-area-inset-bottom,0px))!i
     function build() {
       box = doc.createElement("div");
       box.id = "core-coach"; box.setAttribute("role", "dialog"); box.setAttribute("aria-modal", "false"); box.setAttribute("aria-label", "はじめての案内");
-      box.innerHTML = '<p id="core-coach-t"></p><div class="core-coach-row"><span class="core-coach-n" aria-hidden="true"></span><button type="button" class="core-coach-skip">案内をとじる</button><button type="button" class="core-coach-go" hidden></button></div>';
+      box.innerHTML = '<p id="core-coach-t"></p><div class="core-coach-row"><span class="core-coach-n" aria-hidden="true"></span><button type="button" class="core-coach-skip">案内を閉じる</button><button type="button" class="core-coach-go" hidden></button></div>';
       box.querySelector(".core-coach-skip").onclick = () => stop(false);
       box.querySelector(".core-coach-go").onclick = () => advance();
       (doc.body || doc.documentElement).appendChild(box);
@@ -465,7 +468,7 @@ html.a11y-say body{padding-bottom:calc(64px + env(safe-area-inset-bottom,0px))!i
       while (steps && i < steps.length && steps[i].until && find(steps[i].until)) i++;
       if (!steps) return;
       if (i >= steps.length) return stop(true);
-      const st = steps[i], el = find(st.sel);
+      const st = steps[i], el = st.wait && !find(st.wait) ? null : find(st.sel);
       if (!el) { box.hidden = true; mark(null); return; }
       box.hidden = false; mark(el);
       const fresh = shown !== i;
@@ -516,6 +519,9 @@ html.a11y-say body{padding-bottom:calc(64px + env(safe-area-inset-bottom,0px))!i
       css(); build();
       mo = new MutationObserver(sched); mo.observe(doc.body || doc.documentElement, { childList: true, subtree: true });
       addEventListener("resize", sched); addEventListener("scroll", sched, true);
+      // 見た目だけの変化（開く動き・字の読み込み・あとから出る絵）は上の知らせが来ないことがあるので、出ているあいだは少しずつ測り直す。
+      // 吹き出しが古い場所に残って押す所を隠し、押せなくなっていた（2026-11-22 練習の1問の QA が GitHub の上でだけ止まった）
+      tick = setInterval(sched, 400);
       doc.addEventListener("click", onClick, true); doc.addEventListener("keydown", onKey, true);
       sched();
     }
@@ -526,6 +532,7 @@ html.a11y-say body{padding-bottom:calc(64px + env(safe-area-inset-bottom,0px))!i
       steps = null; opt = {};
       if (mo) mo.disconnect(); mo = null;
       removeEventListener("resize", sched); removeEventListener("scroll", sched, true);
+      clearInterval(tick); tick = 0;
       doc.removeEventListener("click", onClick, true); doc.removeEventListener("keydown", onKey, true);
       if (raf) cancelAnimationFrame(raf); raf = 0;
       mark(null);
@@ -598,7 +605,7 @@ html.a11y-say body{padding-bottom:calc(64px + env(safe-area-inset-bottom,0px))!i
     }, true);
   }
 
-  window.Core = { v: 2, calm, esc, num, jstNow, today, addDays, prevDay, nextDay, md, dayNo, ymOf, ymAdd, untilNext, streak, say, toast, buzz, saveWarn, coach, feedbackUrl, feedbackInfo, bindFeedback };
+  window.Core = { v: 3, calm, esc, num, jstNow, today, addDays, prevDay, nextDay, md, dayNo, ymOf, ymAdd, untilNext, streak, say, toast, buzz, saveWarn, coach, feedbackUrl, feedbackInfo, bindFeedback };
 })();
 </script>
 <!-- core:end -->
@@ -941,7 +948,7 @@ function home() {
   $("go-cal").onclick = () => cal();
   $("go-ach").onclick = achView;
   bindFooter();
-  if (!s.tut) openHow();
+  if (!s.tut) firstPlay();
 }
 function practiceMenu() {
   app.innerHTML = `<header><button class="icon" id="back" aria-label="もどる">←</button><h1>練習<small>今日の記録には入りません（税の手帳には載ります）</small></h1></header>
@@ -952,6 +959,31 @@ function practiceMenu() {
   document.querySelectorAll(".lv button").forEach((b) => (b.onclick = () => startRun("p", +b.dataset.t)));
   bindFooter(); toTop();
 }
+// first-play:begin（shared-workflows の scripts/sync-template.mjs が足した。直すときはひな形を直す）
+// はじめての人：長い「遊び方」の窓を出さず、点数に入らない練習の1問を遊びながら、吹き出しで一言ずつ教える（game-core の Core.coach）。
+// 「見た」は始めたその場で残す（途中でやめても、次からはふつうに始まる。くわしい遊び方はいつでもいちばん下の「遊び方」から）
+const FIRST_STEPS = [
+  { sel: "#choices", button: "やってみる", text: "はじめての方へ：まずは点数に入らない練習の1問です。くわしい遊び方は、いちばん下の「遊び方」にあります。" },
+  { sel: "#next", wait: ".verdict", text: "できました。わけを読んだら、ここを押して進みます。" },
+];
+function firstPlay() {
+  save((s) => { s.tut = true; });
+  // 練習の入り口を開いて、いちばん上（いちばんやさしい）を押す。無ければ前の形（遊び方の窓）にもどす
+  practiceMenu();
+  const b = document.querySelector(".lv button");
+  if (!window.Core || !Core.coach || !b) { home(); return openHow(); }
+  b.click();
+  // 練習は1問だけにする（数を減らしてから描き直す）。問題の数を決めているゲーム（読み直しで数のちがう回を捨てる）は、元の数のまま
+  const keep = JSON.stringify((load().runs || {}).p || null);
+  save((s) => { const r = s.runs && s.runs.p; if (r && Array.isArray(r.list)) r.list = r.list.slice(0, 1); });
+  if (keep !== "null" && !(load().runs || {}).p) save((s) => { s.runs.p = JSON.parse(keep); });
+  play();
+  const seen = (q) => { const e = document.querySelector(q); return !!e && e.getBoundingClientRect().height > 0; };
+  FIRST_STEPS[0].sel = ["#choices","#app h1","#app header","#app"].find(seen) || "#app";
+  // 案内を閉じた（Esc も）ら、1問の練習の途中経過を残さずにホームのいちばん上へ（ふだんの練習の「続きから」を出さない）
+  Core.coach.start(FIRST_STEPS, { home, onEnd: (done) => { if (done === false) { save((s) => { const r = s.runs && s.runs.p; if (r && !(r.res || []).length) delete s.runs.p; }); home(); scrollTo(0, 0); } } });
+}
+// first-play:end
 function startRun(mode, opt) {
   const k = todayKey(); let ng = false;
   save((s) => {
